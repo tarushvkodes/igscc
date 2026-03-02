@@ -37,7 +37,7 @@ downloadBtn.onclick = () => {
 };
 
 function setFiles(newFiles){
-  files = newFiles.filter(f => /^image\//.test(f.type));
+  files = newFiles.filter(f => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
   images = [];
   renderBtn.disabled = files.length === 0;
   downloadBtn.disabled = true;
@@ -50,9 +50,36 @@ async function ensureLoaded(){
   if (images.length === files.length && images.length) return;
   images = [];
   for (const f of files){
-    const bmp = await createImageBitmap(f);
-    images.push(bmp);
+    try {
+      const bmp = await createImageBitmap(f);
+      images.push(bmp);
+    } catch {
+      const fallback = await decodeViaImageTag(f);
+      images.push(fallback);
+    }
   }
+}
+
+function decodeViaImageTag(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = async () => {
+      URL.revokeObjectURL(url);
+      try {
+        const bmp = await createImageBitmap(img);
+        resolve(bmp);
+      } catch {
+        // final fallback: return HTMLImageElement-like wrapper
+        resolve(img);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`Unsupported image format: ${file.name}`));
+    };
+    img.src = url;
+  });
 }
 
 function render(){
