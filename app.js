@@ -1,4 +1,6 @@
 const DEFAULT_W = 2160, DEFAULT_H = 3840; // 4K portrait (9:16)
+const MAX_CANVAS_SIDE = 8192;
+const MAX_CANVAS_PIXELS = 40_000_000;
 const $ = (id) => document.getElementById(id);
 
 const input = $('fileInput');
@@ -7,6 +9,7 @@ const pickBtn = $('pickBtn');
 const renderBtn = $('renderBtn');
 const downloadBtn = $('downloadBtn');
 const statusEl = $('status');
+const progressBarEl = $('progressBar');
 const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
 
@@ -22,10 +25,12 @@ dropZone.addEventListener('drop', (e)=> setFiles([...e.dataTransfer.files]));
 
 renderBtn.onclick = async () => {
   try {
+    setProgress(0);
     await ensureMetaLoaded();
     await render();
   } catch (e) {
     status(`Render failed: ${e?.message || e}`);
+    setProgress(0);
   }
 };
 
@@ -42,9 +47,11 @@ function setFiles(newFiles){
   renderBtn.disabled = files.length === 0;
   downloadBtn.disabled = true;
   status(`${files.length} image(s) selected.`);
+  setProgress(0);
 }
 
 function status(t){ statusEl.textContent = t; }
+function setProgress(p){ if (progressBarEl) progressBarEl.style.width = `${Math.max(0,Math.min(100,p))}%`; }
 
 async function ensureMetaLoaded(){
   if (metas.length === files.length && metas.length) return;
@@ -53,6 +60,7 @@ async function ensureMetaLoaded(){
     const f = files[i];
     const dim = await getImageDimensions(f);
     metas.push(dim);
+    setProgress(((i + 1) / Math.max(1, files.length)) * 25);
     if (i % 10 === 0) await new Promise(r => setTimeout(r, 0));
   }
 }
@@ -94,13 +102,14 @@ async function render(){
   const hiRes = Boolean($('hiResInput')?.checked);
   const gap = Number.isFinite(gapRaw) ? Math.max(0, gapRaw) : 0;
   const pad = Number.isFinite(padRaw) ? Math.max(0, padRaw) : 0;
+  setProgress(30);
 
   if (hiRes) {
     await renderPixelPerfect(files, metas, gap, pad);
     return;
   }
 
-  const { width: W, height: H } = chooseOutputSize(false);
+  const { width: W, height: H } = chooseOutputSize();
   canvas.width = W;
   canvas.height = H;
 
@@ -120,14 +129,31 @@ async function render(){
     const { img, url } = await loadImageElement(files[i]);
     drawCover(img, x, y, r.w, r.h);
     URL.revokeObjectURL(url);
+    setProgress(30 + ((i + 1) / Math.max(1, layout.length)) * 70);
     if (i % 12 === 0) await new Promise(res => requestAnimationFrame(res));
   }
 
+  setProgress(100);
   status(`Rendered ${files.length} image(s) at ${W}×${H} (4K mode).`);
   downloadBtn.disabled = false;
 }
 
-function chooseOutputSize(hiRes) {
+function fitCanvasSize(w, h) {
+  let scale = 1;
+  if (w > MAX_CANVAS_SIDE || h > MAX_CANVAS_SIDE) {
+    scale = Math.min(scale, MAX_CANVAS_SIDE / Math.max(w, h));
+  }
+  if (w * h > MAX_CANVAS_PIXELS) {
+    scale = Math.min(scale, Math.sqrt(MAX_CANVAS_PIXELS / (w * h)));
+  }
+  if (scale < 1) {
+    w = Math.floor(w * scale);
+    h = Math.floor(h * scale);
+  }
+  return { width: Math.max(1, w), height: Math.max(1, h), scale };
+}
+
+function chooseOutputSize() {
   // Standard mode: fixed 4K portrait.
   return { width: DEFAULT_W, height: DEFAULT_H };
 }
@@ -157,7 +183,7 @@ async function renderPixelPerfect(files, metas, gap, pad) {
   const contentW = colWidths.reduce((a, b) => a + b, 0) + gap * Math.max(0, cols - 1) + pad * 2;
   const contentH = rowHeights.reduce((a, b) => a + b, 0) + gap * Math.max(0, rows - 1) + pad * 2;
 
-  // Keep strict 9:16 while preserving every source pixel (no scaling).
+  // Keep strict 9:16 while preserving every source pixel when possible.
   const targetRatio = 9 / 16;
   let W = contentW;
   let H = contentH;
@@ -166,6 +192,11 @@ async function renderPixelPerfect(files, metas, gap, pad) {
   } else {
     W = Math.ceil(H * targetRatio);
   }
+
+  const fitted = fitCanvasSize(W, H);
+  W = fitted.width;
+  H = fitted.height;
+  const canvasScale = fitted.scale;
 
   canvas.width = W;
   canvas.height = H;
@@ -176,8 +207,13 @@ async function renderPixelPerfect(files, metas, gap, pad) {
   ctx.fillStyle = grad;
   ctx.fillRect(0,0,W,H);
 
-  const innerW = contentW - pad * 2;
-  const innerH = contentH - pad * 2;
+  const spad = pad * canvasScale;
+  const sgap = gap * canvasScale;
+  const scolWidths = colWidths.map(v => v * canvasScale);
+  const srowHeights = rowHeights.map(v => v * canvasScale);
+
+  const innerW = contentW * canvasScale - spad * 2;
+  const innerH = contentH * canvasScale - spad * 2;
   const startX = Math.floor((W - innerW) / 2);
   const startY = Math.floor((H - innerH) / 2);
 
@@ -185,30 +221,36 @@ async function renderPixelPerfect(files, metas, gap, pad) {
   let cx = startX;
   for (let c = 0; c < cols; c++) {
     colX[c] = cx;
-    cx += colWidths[c] + gap;
+    cx += scolWidths[c] + sgap;
   }
 
   const rowY = [];
   let ry = startY;
   for (let r = 0; r < rows; r++) {
     rowY[r] = ry;
-    ry += rowHeights[r] + gap;
+    ry += srowHeights[r] + sgap;
   }
 
   for (let i = 0; i < n; i++) {
     const dim = metas[i];
     const r = Math.floor(i / cols);
     const c = i % cols;
-    const x = colX[c] + Math.floor((colWidths[c] - dim.width) / 2);
-    const y = rowY[r] + Math.floor((rowHeights[r] - dim.height) / 2);
+
+    const dw = Math.max(1, Math.floor(dim.width * canvasScale));
+    const dh = Math.max(1, Math.floor(dim.height * canvasScale));
+    const x = Math.floor(colX[c] + (scolWidths[c] - dw) / 2);
+    const y = Math.floor(rowY[r] + (srowHeights[r] - dh) / 2);
 
     const { img, url } = await loadImageElement(files[i]);
-    ctx.drawImage(img, x, y, dim.width, dim.height);
+    ctx.drawImage(img, x, y, dw, dh);
     URL.revokeObjectURL(url);
+    setProgress(30 + ((i + 1) / Math.max(1, n)) * 70);
     if (i % 8 === 0) await new Promise(res => requestAnimationFrame(res));
   }
 
-  status(`Rendered ${n} image(s) at ${W}×${H} (pixel-perfect mode).`);
+  setProgress(100);
+  const modeLabel = canvasScale < 1 ? `pixel-safe (${Math.round(canvasScale * 100)}%)` : 'pixel-perfect';
+  status(`Rendered ${n} image(s) at ${W}×${H} (${modeLabel} mode).`);
   downloadBtn.disabled = false;
 }
 

@@ -32,5 +32,7 @@ input { width:100%; background:#0d1322; border:1px solid #33426f; color:var(--te
 .btn { border:1px solid #3a4d83; background:#1e2950; color:white; padding:.6rem .9rem; border-radius:10px; cursor:pointer; }
 .btn.primary { background: linear-gradient(90deg, #3156ff, #3a8dff); border:none; }
 .btn:disabled { opacity:.45; cursor:not-allowed; }
-#status { color: var(--muted); margin: 0 0 .65rem; }
+#status { color: var(--muted); margin: 0 0 .5rem; }
+.progress-wrap { height: 10px; border: 1px solid #33406a; background: #0c1120; border-radius: 999px; overflow: hidden; margin: 0 0 .75rem; }
+.progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#5be2ff,#4d79ff); transition: width .2s ease; }
 canvas { width: min(420px, 100%); aspect-ratio: 9/16; border-radius: 14px; border: 1px solid #364670; background:#0a0e1a; box-shadow: 0 18px 34px rgba(0,0,0,.45); display:block; }
