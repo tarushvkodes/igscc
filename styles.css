@@ -1,0 +1,34 @@
+:root {
+  --bg: #0b0d14;
+  --panel: #111622;
+  --line: #28314a;
+  --text: #eef3ff;
+  --muted: #98a6c8;
+  --accent: #67e8f9;
+  --hot: #fb7185;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--text);
+  font-family: Manrope, sans-serif;
+  background: radial-gradient(1200px 700px at 15% 0%, #1a2441 0%, var(--bg) 55%);
+}
+.grain {position:fixed; inset:0; pointer-events:none; opacity:.08; background-image:radial-gradient(#fff 0.5px, transparent 0.5px); background-size:3px 3px;}
+.app { max-width: 1050px; margin: 0 auto; padding: 1.4rem 1rem 2.2rem; position: relative; z-index: 1; }
+.kicker { color: var(--hot); letter-spacing: .18em; font-size: .72rem; margin: 0; }
+h1 { font-family: Syne, sans-serif; margin: .2rem 0; font-size: clamp(2rem, 6vw, 4rem); }
+.subtitle { color: var(--muted); max-width: 75ch; margin-top: .2rem; }
+.version { font-size: .78rem; color: #bdd4ff; border: 1px solid #33406a; border-radius: 999px; padding: .18rem .55rem; display:inline-block; }
+.panel { margin-top: 1rem; background: linear-gradient(170deg, rgba(255,255,255,.03), rgba(255,255,255,.01)); border:1px solid var(--line); border-radius: 16px; padding: .95rem; }
+.drop { border: 1px dashed #46537d; border-radius: 14px; text-align:center; padding: 1rem; }
+.drop.drag { border-color: var(--accent); background: rgba(103,232,249,.08); }
+.grid { margin-top: .8rem; display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: .65rem; }
+label { display:grid; gap:.25rem; color: var(--muted); font-size: .9rem; }
+input { width:100%; background:#0d1322; border:1px solid #33426f; color:var(--text); border-radius:10px; padding:.55rem .65rem; }
+.actions { margin-top:.8rem; display:flex; gap:.6rem; flex-wrap:wrap; }
+.btn { border:1px solid #3a4d83; background:#1e2950; color:white; padding:.6rem .9rem; border-radius:10px; cursor:pointer; }
+.btn.primary { background: linear-gradient(90deg, #3156ff, #3a8dff); border:none; }
+.btn:disabled { opacity:.45; cursor:not-allowed; }
+#status { color: var(--muted); margin: 0 0 .65rem; }
+canvas { width: min(420px, 100%); aspect-ratio: 9/16; border-radius: 14px; border: 1px solid #364670; background:#0a0e1a; box-shadow: 0 18px 34px rgba(0,0,0,.45); display:block; }

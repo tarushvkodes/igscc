@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IGSCC — Instagram Spam Collage Creator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Manrope:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="grain"></div>
+  <main class="app">
+    <header>
+      <p class="kicker">9:16 COLLAGE ENGINE</p>
+      <h1>IGSCC</h1>
+      <p class="subtitle">Instagram Spam Collage Creator — drops your photos into a dynamic 1080×1920 composition that auto-rescales based on image count.</p>
+      <span class="version">v0.1.0</span>
+    </header>
+
+    <section class="panel controls">
+      <div class="drop" id="dropZone">
+        <input id="fileInput" type="file" accept="image/*" multiple hidden />
+        <button id="pickBtn" class="btn primary">Add Photos</button>
+        <p>or drag & drop here</p>
+      </div>
+
+      <div class="grid">
+        <label>Gap (px)
+          <input id="gapInput" type="number" value="12" min="0" max="48" />
+        </label>
+        <label>Padding (px)
+          <input id="padInput" type="number" value="32" min="0" max="120" />
+        </label>
+        <label>Randomness
+          <input id="jitterInput" type="range" value="14" min="0" max="30" />
+        </label>
+      </div>
+
+      <div class="actions">
+        <button id="renderBtn" class="btn" disabled>Render 9:16 Collage</button>
+        <button id="downloadBtn" class="btn" disabled>Download PNG</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p id="status">Pick images to start.</p>
+      <canvas id="canvas" width="1080" height="1920"></canvas>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
