@@ -1,4 +1,4 @@
-const W = 1080, H = 1920;
+const DEFAULT_W = 2160, DEFAULT_H = 3840; // 4K portrait (9:16)
 const $ = (id) => document.getElementById(id);
 
 const input = $('fileInput');
@@ -59,8 +59,13 @@ function render(){
   if (!images.length) return;
   const gapRaw = Number($('gapInput').value);
   const padRaw = Number($('padInput').value);
+  const hiRes = Boolean($('hiResInput')?.checked);
   const gap = Number.isFinite(gapRaw) ? Math.max(0, gapRaw) : 0;
   const pad = Number.isFinite(padRaw) ? Math.max(0, padRaw) : 0;
+
+  const { width: W, height: H } = chooseOutputSize(images, hiRes);
+  canvas.width = W;
+  canvas.height = H;
 
   // background
   const grad = ctx.createLinearGradient(0,0,W,H);
@@ -79,8 +84,23 @@ function render(){
     drawCover(img, x, y, r.w, r.h);
   });
 
-  status(`Rendered ${images.length} image(s) at 1080×1920.`);
+  status(`Rendered ${images.length} image(s) at ${W}×${H}.`);
   downloadBtn.disabled = false;
+}
+
+function chooseOutputSize(images, hiRes) {
+  if (!hiRes) return { width: DEFAULT_W, height: DEFAULT_H };
+
+  // Target a larger 9:16 canvas based on source pixel budget.
+  const totalPx = images.reduce((s, im) => s + (im.width * im.height), 0);
+  const meanPx = Math.max(1, Math.floor(totalPx / Math.max(1, images.length)));
+
+  // Scale up from average source size, clamped for browser safety.
+  const targetArea = Math.min(Math.max(meanPx * Math.min(images.length, 6), 9_000_000), 36_000_000);
+  let w = Math.floor(Math.sqrt(targetArea * 9 / 16));
+  w = Math.max(DEFAULT_W, Math.min(w, 4500));
+  const h = Math.floor((w * 16) / 9);
+  return { width: w, height: h };
 }
 
 function buildDynamicLayout(n, w, h, gap){
