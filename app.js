@@ -1,6 +1,7 @@
 const DEFAULT_W = 2160, DEFAULT_H = 3840; // 4K portrait (9:16)
 const MAX_CANVAS_SIDE = 8192;
 const MAX_CANVAS_PIXELS = 40_000_000;
+let renderedPages = [];
 const $ = (id) => document.getElementById(id);
 
 const input = $('fileInput');
@@ -35,6 +36,15 @@ renderBtn.onclick = async () => {
 };
 
 downloadBtn.onclick = () => {
+  if (renderedPages.length > 1) {
+    renderedPages.forEach((dataUrl, i) => {
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `igscc_${Date.now()}_p${i + 1}.png`;
+      a.click();
+    });
+    return;
+  }
   const a = document.createElement('a');
   a.href = canvas.toDataURL('image/png');
   a.download = `igscc_${Date.now()}.png`;
@@ -44,6 +54,7 @@ downloadBtn.onclick = () => {
 function setFiles(newFiles){
   files = newFiles.filter(f => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
   metas = [];
+  renderedPages = [];
   renderBtn.disabled = files.length === 0;
   downloadBtn.disabled = true;
   status(`${files.length} image(s) selected.`);
@@ -104,6 +115,7 @@ async function render(){
   const pad = Number.isFinite(padRaw) ? Math.max(0, padRaw) : 0;
   setProgress(30);
 
+  renderedPages = [];
   if (hiRes) {
     await renderPixelPerfect(files, metas, gap, pad);
     return;
@@ -212,10 +224,12 @@ async function renderPixelPerfect(files, metas, gap, pad) {
   if (W / H > targetRatio) H = Math.ceil(W / targetRatio);
   else W = Math.ceil(H * targetRatio);
 
+  // If full pixel-perfect canvas would exceed browser limits, paginate instead of downscaling.
   const fitted = fitCanvasSize(W, H);
-  W = fitted.width;
-  H = fitted.height;
-  const canvasScale = fitted.scale;
+  if (fitted.scale < 1) {
+    await renderPixelPerfectPaged(rows, files, contentW, contentH, gap, pad, n);
+    return;
+  }
 
   canvas.width = W;
   canvas.height = H;
@@ -226,33 +240,97 @@ async function renderPixelPerfect(files, metas, gap, pad) {
   ctx.fillStyle = grad;
   ctx.fillRect(0,0,W,H);
 
-  const contentWs = contentW * canvasScale;
-  const contentHs = contentH * canvasScale;
-  const xBase = Math.floor((W - contentWs) / 2);
-  const yBase = Math.floor((H - contentHs) / 2);
+  const xBase = Math.floor((W - contentW) / 2);
+  const yBase = Math.floor((H - contentH) / 2);
 
-  let y = yBase + Math.floor(pad * canvasScale);
+  let y = yBase + pad;
   let drawn = 0;
   for (const r of rows) {
-    const rowWs = r.rowW * canvasScale;
-    let x = xBase + Math.floor((contentWs - rowWs) / 2);
+    let x = xBase + Math.floor((contentW - r.rowW) / 2);
     for (const it of r.items) {
-      const dw = Math.max(1, Math.floor(it.w * canvasScale));
-      const dh = Math.max(1, Math.floor(it.h * canvasScale));
       const { img, url } = await loadImageElement(files[it.index]);
-      ctx.drawImage(img, x, y, dw, dh);
+      ctx.drawImage(img, x, y, it.w, it.h);
       URL.revokeObjectURL(url);
-      x += dw + Math.floor(gap * canvasScale);
+      x += it.w + gap;
       drawn += 1;
       setProgress(30 + (drawn / Math.max(1, n)) * 70);
       if (drawn % 8 === 0) await new Promise(res => requestAnimationFrame(res));
     }
-    y += Math.floor(r.rowH * canvasScale) + Math.floor(gap * canvasScale);
+    y += r.rowH + gap;
+  }
+
+  renderedPages = [canvas.toDataURL('image/png')];
+  setProgress(100);
+  status(`Rendered ${n} image(s) at ${W}×${H} (pixel-perfect mode).`);
+  downloadBtn.disabled = false;
+}
+
+async function renderPixelPerfectPaged(rows, files, contentW, contentH, gap, pad, totalImages) {
+  const targetRatio = 9 / 16;
+  const pageW = Math.min(MAX_CANVAS_SIDE, Math.max(1080, contentW));
+  const pageH = Math.min(MAX_CANVAS_SIDE, Math.floor(pageW / targetRatio));
+
+  const availableH = pageH - pad * 2;
+  const pages = [];
+  let cur = [];
+  let curH = 0;
+  for (const r of rows) {
+    const need = (cur.length ? gap : 0) + r.rowH;
+    if (cur.length && curH + need > availableH) {
+      pages.push(cur);
+      cur = [r];
+      curH = r.rowH;
+    } else {
+      cur.push(r);
+      curH += need;
+    }
+  }
+  if (cur.length) pages.push(cur);
+
+  renderedPages = [];
+  let drawn = 0;
+  for (let p = 0; p < pages.length; p++) {
+    canvas.width = pageW;
+    canvas.height = pageH;
+
+    const grad = ctx.createLinearGradient(0,0,pageW,pageH);
+    grad.addColorStop(0,'#0d1120');
+    grad.addColorStop(1,'#0a0e17');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,pageW,pageH);
+
+    const rowsPage = pages[p];
+    const rowsH = rowsPage.reduce((s, r) => s + r.rowH, 0) + gap * Math.max(0, rowsPage.length - 1);
+    let y = Math.floor((pageH - rowsH) / 2);
+
+    for (const r of rowsPage) {
+      let x = Math.floor((pageW - r.rowW) / 2);
+      for (const it of r.items) {
+        const { img, url } = await loadImageElement(files[it.index]);
+        ctx.drawImage(img, x, y, it.w, it.h);
+        URL.revokeObjectURL(url);
+        x += it.w + gap;
+        drawn += 1;
+        setProgress(30 + (drawn / Math.max(1, totalImages)) * 70);
+      }
+      y += r.rowH + gap;
+      await new Promise(res => requestAnimationFrame(res));
+    }
+
+    renderedPages.push(canvas.toDataURL('image/png'));
+  }
+
+  // keep first page visible on canvas
+  if (renderedPages.length) {
+    const img = new Image();
+    img.src = renderedPages[0];
+    await img.decode();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,0,0);
   }
 
   setProgress(100);
-  const modeLabel = canvasScale < 1 ? `pixel-safe (${Math.round(canvasScale * 100)}%)` : 'pixel-perfect';
-  status(`Rendered ${n} image(s) at ${W}×${H} (${modeLabel} mode).`);
+  status(`Rendered ${totalImages} image(s) as ${renderedPages.length} pixel-perfect page(s) ${pageW}×${pageH}. Download saves all pages.`);
   downloadBtn.disabled = false;
 }
 
@@ -293,7 +371,7 @@ function buildJustifiedLayout(metas, maxW, maxH, gap, targetRowH = 180) {
   const finalW = usedW * scale;
   const finalH = usedH * scale;
   const xBase = (maxW - finalW) / 2;
-  const yBase = (maxH - finalH) / 2;
+  const yBase = 0;
 
   let y = yBase;
   for (const r of rows) {
