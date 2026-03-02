@@ -162,14 +162,18 @@ function buildDynamicLayout(n, w, h, gap){
 }
 
 function drawCover(img, x, y, w, h){
-  const scale = Math.max(w / img.width, h / img.height);
-  const sw = w / scale;
-  const sh = h / scale;
-  const ox = (img.width - sw) / 2;
-  const oy = (img.height - sh) / 2;
+  // "Contain" fit (no cropping): preserve full image in each tile.
+  const scale = Math.min(w / img.width, h / img.height);
+  const dw = img.width * scale;
+  const dh = img.height * scale;
+  const dx = x + (w - dw) / 2;
+  const dy = y + (h - dh) / 2;
 
-  // deterministic, no randomness
-  ctx.drawImage(img, ox, oy, sw, sh, x, y, w, h);
+  // subtle tile background for letterboxed areas
+  ctx.fillStyle = '#0a0d16';
+  ctx.fillRect(x, y, w, h);
+
+  ctx.drawImage(img, dx, dy, dw, dh);
 }
 
 function roundRectPath(x,y,w,h,r){
