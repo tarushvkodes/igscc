@@ -11,8 +11,7 @@ const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
 
 let files = [];
-let images = [];
-const MAX_FILES = 120;
+let metas = [];
 
 pickBtn.onclick = () => input.click();
 input.onchange = (e) => setFiles([...e.target.files]);
@@ -23,8 +22,8 @@ dropZone.addEventListener('drop', (e)=> setFiles([...e.dataTransfer.files]));
 
 renderBtn.onclick = async () => {
   try {
-    await ensureLoaded();
-    render();
+    await ensureMetaLoaded();
+    await render();
   } catch (e) {
     status(`Render failed: ${e?.message || e}`);
   }
@@ -38,62 +37,34 @@ downloadBtn.onclick = () => {
 };
 
 function setFiles(newFiles){
-  const accepted = newFiles.filter(f => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
-  files = accepted.slice(0, MAX_FILES);
-  images = [];
+  files = newFiles.filter(f => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
+  metas = [];
   renderBtn.disabled = files.length === 0;
   downloadBtn.disabled = true;
-  if (accepted.length > MAX_FILES) {
-    status(`${accepted.length} selected; capped to first ${MAX_FILES} to prevent crashes.`);
-  } else {
-    status(`${files.length} image(s) selected.`);
-  }
+  status(`${files.length} image(s) selected.`);
 }
 
 function status(t){ statusEl.textContent = t; }
 
-async function ensureLoaded(){
-  if (images.length === files.length && images.length) return;
-  images = [];
+async function ensureMetaLoaded(){
+  if (metas.length === files.length && metas.length) return;
+  metas = [];
   for (let i = 0; i < files.length; i++){
     const f = files[i];
-    try {
-      const bmp = await decodeSafeBitmap(f);
-      images.push(bmp);
-    } catch {
-      const fallback = await decodeViaImageTag(f);
-      images.push(fallback);
-    }
-
-    // yield to UI every few images to avoid tab freeze
-    if (i % 8 === 0) await new Promise(r => setTimeout(r, 0));
+    const dim = await getImageDimensions(f);
+    metas.push(dim);
+    if (i % 10 === 0) await new Promise(r => setTimeout(r, 0));
   }
 }
 
-async function decodeSafeBitmap(file) {
-  // Decode with a soft max dimension to prevent memory blowups on large batches.
-  // createImageBitmap resize options are not universal, so try/catch.
-  const MAX_DIM = 2200;
-  try {
-    return await createImageBitmap(file, { resizeWidth: MAX_DIM, resizeHeight: MAX_DIM, resizeQuality: 'high' });
-  } catch {
-    return await createImageBitmap(file);
-  }
-}
-
-function decodeViaImageTag(file) {
+function getImageDimensions(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
-    img.onload = async () => {
+    img.onload = () => {
+      const out = { width: img.naturalWidth || img.width, height: img.naturalHeight || img.height };
       URL.revokeObjectURL(url);
-      try {
-        const bmp = await createImageBitmap(img);
-        resolve(bmp);
-      } catch {
-        // final fallback: return HTMLImageElement-like wrapper
-        resolve(img);
-      }
+      resolve(out);
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -103,8 +74,21 @@ function decodeViaImageTag(file) {
   });
 }
 
-function render(){
-  if (!images.length) return;
+function loadImageElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve({ img, url });
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`Unsupported image format: ${file.name}`));
+    };
+    img.src = url;
+  });
+}
+
+async function render(){
+  if (!files.length) return;
   const gapRaw = Number($('gapInput').value);
   const padRaw = Number($('padInput').value);
   const hiRes = Boolean($('hiResInput')?.checked);
@@ -112,11 +96,11 @@ function render(){
   const pad = Number.isFinite(padRaw) ? Math.max(0, padRaw) : 0;
 
   if (hiRes) {
-    renderPixelPerfect(images, gap, pad);
+    await renderPixelPerfect(files, metas, gap, pad);
     return;
   }
 
-  const { width: W, height: H } = chooseOutputSize(images, false);
+  const { width: W, height: H } = chooseOutputSize(false);
   canvas.width = W;
   canvas.height = H;
 
@@ -127,21 +111,23 @@ function render(){
   ctx.fillStyle = grad;
   ctx.fillRect(0,0,W,H);
 
-  const layout = buildDynamicLayout(images.length, W - pad * 2, H - pad * 2, gap);
+  const layout = buildDynamicLayout(files.length, W - pad * 2, H - pad * 2, gap);
 
-  layout.forEach((r, i) => {
-    const img = images[i % images.length];
-    if (!img) return;
+  for (let i = 0; i < layout.length; i++) {
+    const r = layout[i];
     const x = r.x + pad;
     const y = r.y + pad;
+    const { img, url } = await loadImageElement(files[i]);
     drawCover(img, x, y, r.w, r.h);
-  });
+    URL.revokeObjectURL(url);
+    if (i % 12 === 0) await new Promise(res => requestAnimationFrame(res));
+  }
 
-  status(`Rendered ${images.length} image(s) at ${W}×${H} (4K mode).`);
+  status(`Rendered ${files.length} image(s) at ${W}×${H} (4K mode).`);
   downloadBtn.disabled = false;
 }
 
-function chooseOutputSize(images, hiRes) {
+function chooseOutputSize(hiRes) {
   // Standard mode: fixed 4K portrait.
   return { width: DEFAULT_W, height: DEFAULT_H };
 }
@@ -153,8 +139,8 @@ function chooseCols(n) {
   return 4;
 }
 
-function renderPixelPerfect(images, gap, pad) {
-  const n = images.length;
+async function renderPixelPerfect(files, metas, gap, pad) {
+  const n = metas.length;
   const cols = chooseCols(n);
   const rows = Math.ceil(n / cols);
 
@@ -164,8 +150,8 @@ function renderPixelPerfect(images, gap, pad) {
   for (let i = 0; i < n; i++) {
     const r = Math.floor(i / cols);
     const c = i % cols;
-    colWidths[c] = Math.max(colWidths[c], images[i].width);
-    rowHeights[r] = Math.max(rowHeights[r], images[i].height);
+    colWidths[c] = Math.max(colWidths[c], metas[i].width);
+    rowHeights[r] = Math.max(rowHeights[r], metas[i].height);
   }
 
   const contentW = colWidths.reduce((a, b) => a + b, 0) + gap * Math.max(0, cols - 1) + pad * 2;
@@ -210,15 +196,19 @@ function renderPixelPerfect(images, gap, pad) {
   }
 
   for (let i = 0; i < n; i++) {
-    const img = images[i];
+    const dim = metas[i];
     const r = Math.floor(i / cols);
     const c = i % cols;
-    const x = colX[c] + Math.floor((colWidths[c] - img.width) / 2);
-    const y = rowY[r] + Math.floor((rowHeights[r] - img.height) / 2);
-    ctx.drawImage(img, x, y, img.width, img.height);
+    const x = colX[c] + Math.floor((colWidths[c] - dim.width) / 2);
+    const y = rowY[r] + Math.floor((rowHeights[r] - dim.height) / 2);
+
+    const { img, url } = await loadImageElement(files[i]);
+    ctx.drawImage(img, x, y, dim.width, dim.height);
+    URL.revokeObjectURL(url);
+    if (i % 8 === 0) await new Promise(res => requestAnimationFrame(res));
   }
 
-  status(`Rendered ${images.length} image(s) at ${W}×${H} (pixel-perfect mode).`);
+  status(`Rendered ${n} image(s) at ${W}×${H} (pixel-perfect mode).`);
   downloadBtn.disabled = false;
 }
 
