@@ -12,6 +12,7 @@ const ctx = canvas.getContext('2d');
 
 let files = [];
 let images = [];
+const MAX_FILES = 120;
 
 pickBtn.onclick = () => input.click();
 input.onchange = (e) => setFiles([...e.target.files]);
@@ -37,11 +38,16 @@ downloadBtn.onclick = () => {
 };
 
 function setFiles(newFiles){
-  files = newFiles.filter(f => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
+  const accepted = newFiles.filter(f => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
+  files = accepted.slice(0, MAX_FILES);
   images = [];
   renderBtn.disabled = files.length === 0;
   downloadBtn.disabled = true;
-  status(`${files.length} image(s) selected.`);
+  if (accepted.length > MAX_FILES) {
+    status(`${accepted.length} selected; capped to first ${MAX_FILES} to prevent crashes.`);
+  } else {
+    status(`${files.length} image(s) selected.`);
+  }
 }
 
 function status(t){ statusEl.textContent = t; }
@@ -49,14 +55,29 @@ function status(t){ statusEl.textContent = t; }
 async function ensureLoaded(){
   if (images.length === files.length && images.length) return;
   images = [];
-  for (const f of files){
+  for (let i = 0; i < files.length; i++){
+    const f = files[i];
     try {
-      const bmp = await createImageBitmap(f);
+      const bmp = await decodeSafeBitmap(f);
       images.push(bmp);
     } catch {
       const fallback = await decodeViaImageTag(f);
       images.push(fallback);
     }
+
+    // yield to UI every few images to avoid tab freeze
+    if (i % 8 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+}
+
+async function decodeSafeBitmap(file) {
+  // Decode with a soft max dimension to prevent memory blowups on large batches.
+  // createImageBitmap resize options are not universal, so try/catch.
+  const MAX_DIM = 2200;
+  try {
+    return await createImageBitmap(file, { resizeWidth: MAX_DIM, resizeHeight: MAX_DIM, resizeQuality: 'high' });
+  } catch {
+    return await createImageBitmap(file);
   }
 }
 
@@ -122,10 +143,12 @@ function chooseOutputSize(images, hiRes) {
   const totalPx = images.reduce((s, im) => s + (im.width * im.height), 0);
   const meanPx = Math.max(1, Math.floor(totalPx / Math.max(1, images.length)));
 
-  // Scale up from average source size, clamped for browser safety.
-  const targetArea = Math.min(Math.max(meanPx * Math.min(images.length, 6), 9_000_000), 36_000_000);
+  // If many images, keep output moderate to prevent crashes.
+  const crowdPenalty = images.length > 40 ? 0.55 : images.length > 20 ? 0.72 : 1;
+
+  const targetArea = Math.min(Math.max(meanPx * Math.min(images.length, 6) * crowdPenalty, 9_000_000), 28_000_000);
   let w = Math.floor(Math.sqrt(targetArea * 9 / 16));
-  w = Math.max(DEFAULT_W, Math.min(w, 4500));
+  w = Math.max(DEFAULT_W, Math.min(w, 3960));
   const h = Math.floor((w * 16) / 9);
   return { width: w, height: h };
 }
