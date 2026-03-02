@@ -120,21 +120,28 @@ async function render(){
   ctx.fillStyle = grad;
   ctx.fillRect(0,0,W,H);
 
-  const layout = buildDynamicLayout(files.length, W - pad * 2, H - pad * 2, gap);
+  const layout = buildJustifiedLayout(
+    metas,
+    W - pad * 2,
+    H - pad * 2,
+    gap,
+    Math.max(90, Math.floor((H - pad * 2) / Math.max(3, Math.ceil(Math.sqrt(files.length)))))
+  );
 
   for (let i = 0; i < layout.length; i++) {
     const r = layout[i];
     const x = r.x + pad;
     const y = r.y + pad;
     const { img, url } = await loadImageElement(files[i]);
-    drawCover(img, x, y, r.w, r.h);
+    // no crop: draw full image into an aspect-matched rect
+    ctx.drawImage(img, x, y, r.w, r.h);
     URL.revokeObjectURL(url);
     setProgress(30 + ((i + 1) / Math.max(1, layout.length)) * 70);
     if (i % 12 === 0) await new Promise(res => requestAnimationFrame(res));
   }
 
   setProgress(100);
-  status(`Rendered ${files.length} image(s) at ${W}×${H} (4K mode).`);
+  status(`Rendered ${files.length} image(s) at ${W}×${H} (4K mode, justified fit).`);
   downloadBtn.disabled = false;
 }
 
@@ -254,59 +261,57 @@ async function renderPixelPerfect(files, metas, gap, pad) {
   downloadBtn.disabled = false;
 }
 
-function buildDynamicLayout(n, w, h, gap){
-  if (n <= 1) return [{x:0,y:0,w,h}];
-  if (n === 2) return [{x:0,y:0,w,h:(h-gap)/2},{x:0,y:(h+gap)/2,w,h:(h-gap)/2}];
-  if (n === 3) {
-    const top = (h*0.52);
-    return [
-      {x:0,y:0,w,h:top-gap/2},
-      {x:0,y:top+gap/2,w:(w-gap)/2,h:h-top-gap/2},
-      {x:(w+gap)/2,y:top+gap/2,w:(w-gap)/2,h:h-top-gap/2}
-    ];
+function buildJustifiedLayout(metas, maxW, maxH, gap, targetRowH = 180) {
+  const rects = [];
+  let y = 0;
+  let row = [];
+  let aspectSum = 0;
+
+  const flushRow = (force = false) => {
+    if (!row.length) return;
+    const gaps = gap * Math.max(0, row.length - 1);
+    let rowH = targetRowH;
+    if (!force) {
+      rowH = (maxW - gaps) / Math.max(0.0001, aspectSum);
+    }
+    let x = 0;
+    for (let i = 0; i < row.length; i++) {
+      const m = row[i];
+      const w = rowH * (m.width / Math.max(1, m.height));
+      rects.push({ x, y, w, h: rowH });
+      x += w + gap;
+    }
+    y += rowH + gap;
+    row = [];
+    aspectSum = 0;
+  };
+
+  for (let i = 0; i < metas.length; i++) {
+    const m = metas[i];
+    const ar = m.width / Math.max(1, m.height);
+    row.push(m);
+    aspectSum += ar;
+
+    const estW = aspectSum * targetRowH + gap * Math.max(0, row.length - 1);
+    if (estW >= maxW) flushRow(false);
+  }
+  flushRow(true);
+
+  const usedH = Math.max(1, y - gap);
+  const fit = Math.min(1, maxH / usedH);
+
+  if (fit < 1) {
+    for (const r of rects) {
+      r.x *= fit;
+      r.y *= fit;
+      r.w *= fit;
+      r.h *= fit;
+    }
   }
 
-  const cols = n <= 6 ? 2 : n <= 12 ? 3 : 4;
-  const rows = Math.ceil(n / cols);
-  const cellW = (w - gap * (cols - 1)) / cols;
-  const cellH = (h - gap * (rows - 1)) / rows;
-  const out = [];
+  const finalH = usedH * fit;
+  const yOffset = Math.max(0, (maxH - finalH) / 2);
+  for (const r of rects) r.y += yOffset;
 
-  for (let i = 0; i < n; i++) {
-    const row = Math.floor(i / cols);
-    const col = i % cols;
-    out.push({
-      x: col * (cellW + gap),
-      y: row * (cellH + gap),
-      w: cellW,
-      h: cellH,
-    });
-  }
-  return out;
-}
-
-function drawCover(img, x, y, w, h){
-  // "Contain" fit (no cropping): preserve full image in each tile.
-  const scale = Math.min(w / img.width, h / img.height);
-  const dw = img.width * scale;
-  const dh = img.height * scale;
-  const dx = x + (w - dw) / 2;
-  const dy = y + (h - dh) / 2;
-
-  // subtle tile background for letterboxed areas
-  ctx.fillStyle = '#0a0d16';
-  ctx.fillRect(x, y, w, h);
-
-  ctx.drawImage(img, dx, dy, dw, dh);
-}
-
-function roundRectPath(x,y,w,h,r){
-  const rr = Math.min(r, w/2, h/2);
-  ctx.beginPath();
-  ctx.moveTo(x+rr, y);
-  ctx.arcTo(x+w, y, x+w, y+h, rr);
-  ctx.arcTo(x+w, y+h, x, y+h, rr);
-  ctx.arcTo(x, y+h, x, y, rr);
-  ctx.arcTo(x, y, x+w, y, rr);
-  ctx.closePath();
+  return rects;
 }
