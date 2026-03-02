@@ -174,31 +174,43 @@ function chooseCols(n) {
 
 async function renderPixelPerfect(files, metas, gap, pad) {
   const n = metas.length;
-  const cols = chooseCols(n);
-  const rows = Math.ceil(n / cols);
 
-  const colWidths = new Array(cols).fill(0);
-  const rowHeights = new Array(rows).fill(0);
+  // Build pixel-true rows (no scaling of source images), minimizing leftover row gaps.
+  const totalArea = metas.reduce((s, m) => s + m.width * m.height, 0);
+  const targetRowW = Math.max(1200, Math.floor(Math.sqrt(totalArea * (9 / 16))));
+
+  const rows = [];
+  let row = [];
+  let rowW = 0;
+  let rowH = 0;
+
+  const flush = () => {
+    if (!row.length) return;
+    rows.push({ items: row, rowW, rowH });
+    row = [];
+    rowW = 0;
+    rowH = 0;
+  };
 
   for (let i = 0; i < n; i++) {
-    const r = Math.floor(i / cols);
-    const c = i % cols;
-    colWidths[c] = Math.max(colWidths[c], metas[i].width);
-    rowHeights[r] = Math.max(rowHeights[r], metas[i].height);
+    const m = metas[i];
+    const nextW = rowW + (row.length ? gap : 0) + m.width;
+    if (row.length && nextW > targetRowW) flush();
+    row.push({ index: i, w: m.width, h: m.height });
+    rowW = rowW + (row.length > 1 ? gap : 0) + m.width;
+    rowH = Math.max(rowH, m.height);
   }
+  flush();
 
-  const contentW = colWidths.reduce((a, b) => a + b, 0) + gap * Math.max(0, cols - 1) + pad * 2;
-  const contentH = rowHeights.reduce((a, b) => a + b, 0) + gap * Math.max(0, rows - 1) + pad * 2;
+  const contentW = Math.max(...rows.map(r => r.rowW), 1) + pad * 2;
+  const contentH = rows.reduce((s, r) => s + r.rowH, 0) + gap * Math.max(0, rows.length - 1) + pad * 2;
 
-  // Keep strict 9:16 while preserving every source pixel when possible.
+  // Enforce 9:16 by extending the shorter side only.
   const targetRatio = 9 / 16;
   let W = contentW;
   let H = contentH;
-  if (W / H > targetRatio) {
-    H = Math.ceil(W / targetRatio);
-  } else {
-    W = Math.ceil(H * targetRatio);
-  }
+  if (W / H > targetRatio) H = Math.ceil(W / targetRatio);
+  else W = Math.ceil(H * targetRatio);
 
   const fitted = fitCanvasSize(W, H);
   W = fitted.width;
@@ -214,45 +226,28 @@ async function renderPixelPerfect(files, metas, gap, pad) {
   ctx.fillStyle = grad;
   ctx.fillRect(0,0,W,H);
 
-  const spad = pad * canvasScale;
-  const sgap = gap * canvasScale;
-  const scolWidths = colWidths.map(v => v * canvasScale);
-  const srowHeights = rowHeights.map(v => v * canvasScale);
+  const contentWs = contentW * canvasScale;
+  const contentHs = contentH * canvasScale;
+  const xBase = Math.floor((W - contentWs) / 2);
+  const yBase = Math.floor((H - contentHs) / 2);
 
-  const innerW = contentW * canvasScale - spad * 2;
-  const innerH = contentH * canvasScale - spad * 2;
-  const startX = Math.floor((W - innerW) / 2);
-  const startY = Math.floor((H - innerH) / 2);
-
-  const colX = [];
-  let cx = startX;
-  for (let c = 0; c < cols; c++) {
-    colX[c] = cx;
-    cx += scolWidths[c] + sgap;
-  }
-
-  const rowY = [];
-  let ry = startY;
-  for (let r = 0; r < rows; r++) {
-    rowY[r] = ry;
-    ry += srowHeights[r] + sgap;
-  }
-
-  for (let i = 0; i < n; i++) {
-    const dim = metas[i];
-    const r = Math.floor(i / cols);
-    const c = i % cols;
-
-    const dw = Math.max(1, Math.floor(dim.width * canvasScale));
-    const dh = Math.max(1, Math.floor(dim.height * canvasScale));
-    const x = Math.floor(colX[c] + (scolWidths[c] - dw) / 2);
-    const y = Math.floor(rowY[r] + (srowHeights[r] - dh) / 2);
-
-    const { img, url } = await loadImageElement(files[i]);
-    ctx.drawImage(img, x, y, dw, dh);
-    URL.revokeObjectURL(url);
-    setProgress(30 + ((i + 1) / Math.max(1, n)) * 70);
-    if (i % 8 === 0) await new Promise(res => requestAnimationFrame(res));
+  let y = yBase + Math.floor(pad * canvasScale);
+  let drawn = 0;
+  for (const r of rows) {
+    const rowWs = r.rowW * canvasScale;
+    let x = xBase + Math.floor((contentWs - rowWs) / 2);
+    for (const it of r.items) {
+      const dw = Math.max(1, Math.floor(it.w * canvasScale));
+      const dh = Math.max(1, Math.floor(it.h * canvasScale));
+      const { img, url } = await loadImageElement(files[it.index]);
+      ctx.drawImage(img, x, y, dw, dh);
+      URL.revokeObjectURL(url);
+      x += dw + Math.floor(gap * canvasScale);
+      drawn += 1;
+      setProgress(30 + (drawn / Math.max(1, n)) * 70);
+      if (drawn % 8 === 0) await new Promise(res => requestAnimationFrame(res));
+    }
+    y += Math.floor(r.rowH * canvasScale) + Math.floor(gap * canvasScale);
   }
 
   setProgress(100);
@@ -262,26 +257,17 @@ async function renderPixelPerfect(files, metas, gap, pad) {
 }
 
 function buildJustifiedLayout(metas, maxW, maxH, gap, targetRowH = 180) {
-  const rects = [];
-  let y = 0;
+  const rows = [];
   let row = [];
   let aspectSum = 0;
 
   const flushRow = (force = false) => {
     if (!row.length) return;
     const gaps = gap * Math.max(0, row.length - 1);
-    let rowH = targetRowH;
-    if (!force) {
-      rowH = (maxW - gaps) / Math.max(0.0001, aspectSum);
-    }
-    let x = 0;
-    for (let i = 0; i < row.length; i++) {
-      const m = row[i];
-      const w = rowH * (m.width / Math.max(1, m.height));
-      rects.push({ x, y, w, h: rowH });
-      x += w + gap;
-    }
-    y += rowH + gap;
+    const rowH = force ? targetRowH : (maxW - gaps) / Math.max(0.0001, aspectSum);
+    const items = row.map(m => ({ w: rowH * (m.width / Math.max(1, m.height)), h: rowH }));
+    const rowW = items.reduce((s, it) => s + it.w, 0) + gaps;
+    rows.push({ items, rowW, rowH });
     row = [];
     aspectSum = 0;
   };
@@ -297,21 +283,28 @@ function buildJustifiedLayout(metas, maxW, maxH, gap, targetRowH = 180) {
   }
   flushRow(true);
 
-  const usedH = Math.max(1, y - gap);
-  const fit = Math.min(1, maxH / usedH);
+  const usedW = Math.max(...rows.map(r => r.rowW), 1);
+  const usedH = rows.reduce((s, r) => s + r.rowH, 0) + gap * Math.max(0, rows.length - 1);
 
-  if (fit < 1) {
-    for (const r of rects) {
-      r.x *= fit;
-      r.y *= fit;
-      r.w *= fit;
-      r.h *= fit;
+  // Scale up/down to fill frame better while preserving layout proportions
+  const scale = Math.min(maxW / usedW, maxH / usedH);
+
+  const rects = [];
+  const finalW = usedW * scale;
+  const finalH = usedH * scale;
+  const xBase = (maxW - finalW) / 2;
+  const yBase = (maxH - finalH) / 2;
+
+  let y = yBase;
+  for (const r of rows) {
+    const rowW = r.rowW * scale;
+    let x = xBase + (finalW - rowW) / 2;
+    for (const it of r.items) {
+      rects.push({ x, y, w: it.w * scale, h: it.h * scale });
+      x += it.w * scale + gap * scale;
     }
+    y += r.rowH * scale + gap * scale;
   }
-
-  const finalH = usedH * fit;
-  const yOffset = Math.max(0, (maxH - finalH) / 2);
-  for (const r of rects) r.y += yOffset;
 
   return rects;
 }
