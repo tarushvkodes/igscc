@@ -21,8 +21,12 @@ input.onchange = (e) => setFiles([...e.target.files]);
 dropZone.addEventListener('drop', (e)=> setFiles([...e.dataTransfer.files]));
 
 renderBtn.onclick = async () => {
-  await ensureLoaded();
-  render();
+  try {
+    await ensureLoaded();
+    render();
+  } catch (e) {
+    status(`Render failed: ${e?.message || e}`);
+  }
 };
 
 downloadBtn.onclick = () => {
@@ -53,9 +57,10 @@ async function ensureLoaded(){
 
 function render(){
   if (!images.length) return;
-  const gap = Number($('gapInput').value) || 12;
-  const pad = Number($('padInput').value) || 32;
-  const jitter = Number($('jitterInput').value) || 0;
+  const gapRaw = Number($('gapInput').value);
+  const padRaw = Number($('padInput').value);
+  const gap = Number.isFinite(gapRaw) ? Math.max(0, gapRaw) : 0;
+  const pad = Number.isFinite(padRaw) ? Math.max(0, padRaw) : 0;
 
   // background
   const grad = ctx.createLinearGradient(0,0,W,H);
@@ -71,7 +76,7 @@ function render(){
     if (!img) return;
     const x = r.x + pad;
     const y = r.y + pad;
-    drawCover(img, x, y, r.w, r.h, jitter);
+    drawCover(img, x, y, r.w, r.h);
   });
 
   status(`Rendered ${images.length} image(s) at 1080×1920.`);
@@ -109,20 +114,15 @@ function buildDynamicLayout(n, w, h, gap){
   return out;
 }
 
-function drawCover(img, x, y, w, h, jitter = 0){
+function drawCover(img, x, y, w, h){
   const scale = Math.max(w / img.width, h / img.height);
   const sw = w / scale;
   const sh = h / scale;
+  const ox = (img.width - sw) / 2;
+  const oy = (img.height - sh) / 2;
 
-  const j = jitter ? (jitter / 100) : 0;
-  const ox = (img.width - sw) / 2 + (Math.random() - 0.5) * j * sw;
-  const oy = (img.height - sh) / 2 + (Math.random() - 0.5) * j * sh;
-
-  ctx.save();
-  roundRectPath(x, y, w, h, 12);
-  ctx.clip();
+  // deterministic, no randomness
   ctx.drawImage(img, ox, oy, sw, sh, x, y, w, h);
-  ctx.restore();
 }
 
 function roundRectPath(x,y,w,h,r){
