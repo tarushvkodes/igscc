@@ -111,7 +111,12 @@ function render(){
   const gap = Number.isFinite(gapRaw) ? Math.max(0, gapRaw) : 0;
   const pad = Number.isFinite(padRaw) ? Math.max(0, padRaw) : 0;
 
-  const { width: W, height: H } = chooseOutputSize(images, hiRes);
+  if (hiRes) {
+    renderPixelPerfect(images, gap, pad);
+    return;
+  }
+
+  const { width: W, height: H } = chooseOutputSize(images, false);
   canvas.width = W;
   canvas.height = H;
 
@@ -132,25 +137,89 @@ function render(){
     drawCover(img, x, y, r.w, r.h);
   });
 
-  status(`Rendered ${images.length} image(s) at ${W}×${H}.`);
+  status(`Rendered ${images.length} image(s) at ${W}×${H} (4K mode).`);
   downloadBtn.disabled = false;
 }
 
 function chooseOutputSize(images, hiRes) {
-  if (!hiRes) return { width: DEFAULT_W, height: DEFAULT_H };
+  // Standard mode: fixed 4K portrait.
+  return { width: DEFAULT_W, height: DEFAULT_H };
+}
 
-  // Target a larger 9:16 canvas based on source pixel budget.
-  const totalPx = images.reduce((s, im) => s + (im.width * im.height), 0);
-  const meanPx = Math.max(1, Math.floor(totalPx / Math.max(1, images.length)));
+function chooseCols(n) {
+  if (n <= 3) return n;
+  if (n <= 6) return 2;
+  if (n <= 12) return 3;
+  return 4;
+}
 
-  // If many images, keep output moderate to prevent crashes.
-  const crowdPenalty = images.length > 40 ? 0.55 : images.length > 20 ? 0.72 : 1;
+function renderPixelPerfect(images, gap, pad) {
+  const n = images.length;
+  const cols = chooseCols(n);
+  const rows = Math.ceil(n / cols);
 
-  const targetArea = Math.min(Math.max(meanPx * Math.min(images.length, 6) * crowdPenalty, 9_000_000), 28_000_000);
-  let w = Math.floor(Math.sqrt(targetArea * 9 / 16));
-  w = Math.max(DEFAULT_W, Math.min(w, 3960));
-  const h = Math.floor((w * 16) / 9);
-  return { width: w, height: h };
+  const colWidths = new Array(cols).fill(0);
+  const rowHeights = new Array(rows).fill(0);
+
+  for (let i = 0; i < n; i++) {
+    const r = Math.floor(i / cols);
+    const c = i % cols;
+    colWidths[c] = Math.max(colWidths[c], images[i].width);
+    rowHeights[r] = Math.max(rowHeights[r], images[i].height);
+  }
+
+  const contentW = colWidths.reduce((a, b) => a + b, 0) + gap * Math.max(0, cols - 1) + pad * 2;
+  const contentH = rowHeights.reduce((a, b) => a + b, 0) + gap * Math.max(0, rows - 1) + pad * 2;
+
+  // Keep strict 9:16 while preserving every source pixel (no scaling).
+  const targetRatio = 9 / 16;
+  let W = contentW;
+  let H = contentH;
+  if (W / H > targetRatio) {
+    H = Math.ceil(W / targetRatio);
+  } else {
+    W = Math.ceil(H * targetRatio);
+  }
+
+  canvas.width = W;
+  canvas.height = H;
+
+  const grad = ctx.createLinearGradient(0,0,W,H);
+  grad.addColorStop(0,'#0d1120');
+  grad.addColorStop(1,'#0a0e17');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,W,H);
+
+  const innerW = contentW - pad * 2;
+  const innerH = contentH - pad * 2;
+  const startX = Math.floor((W - innerW) / 2);
+  const startY = Math.floor((H - innerH) / 2);
+
+  const colX = [];
+  let cx = startX;
+  for (let c = 0; c < cols; c++) {
+    colX[c] = cx;
+    cx += colWidths[c] + gap;
+  }
+
+  const rowY = [];
+  let ry = startY;
+  for (let r = 0; r < rows; r++) {
+    rowY[r] = ry;
+    ry += rowHeights[r] + gap;
+  }
+
+  for (let i = 0; i < n; i++) {
+    const img = images[i];
+    const r = Math.floor(i / cols);
+    const c = i % cols;
+    const x = colX[c] + Math.floor((colWidths[c] - img.width) / 2);
+    const y = rowY[r] + Math.floor((rowHeights[r] - img.height) / 2);
+    ctx.drawImage(img, x, y, img.width, img.height);
+  }
+
+  status(`Rendered ${images.length} image(s) at ${W}×${H} (pixel-perfect mode).`);
+  downloadBtn.disabled = false;
 }
 
 function buildDynamicLayout(n, w, h, gap){
